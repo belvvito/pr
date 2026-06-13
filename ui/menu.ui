@@ -1,0 +1,132 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MenuWindow</class>
+ <widget class="QMainWindow" name="MenuWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1000</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Аквилон</string>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>800</width>
+    <height>600</height>
+   </size>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="main_layout">
+    <item>
+     <layout class="QHBoxLayout" name="top_layout">
+      <item>
+       <widget class="QLabel" name="label_logo">
+        <property name="text">
+         <string>Аквилон</string>
+        </property>
+        <property name="styleSheet">
+         <string>font-size: 20px; font-weight: bold; color: #d35400;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLineEdit" name="line_search">
+        <property name="placeholderText">
+         <string>Поиск...</string>
+        </property>
+        <property name="styleSheet">
+         <string>padding: 8px;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="combo_category">
+        <property name="minimumWidth">
+         <number>120</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="combo_supplier">
+        <property name="minimumWidth">
+         <number>150</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_sort">
+        <property name="text">
+         <string>Сортировка ↑</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_orders">
+        <property name="text">
+         <string>Заказы</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_add">
+        <property name="text">
+         <string>Добавить</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_user">
+        <property name="text">
+         <string>Гость</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight</set>
+        </property>
+        <property name="styleSheet">
+         <string>font-size: 14px; font-weight: bold;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_exit">
+        <property name="text">
+         <string>Выход</string>
+        </property>
+        <property name="styleSheet">
+         <string>background: #e74c3c; color: white;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QScrollArea" name="scrollArea">
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="scrollWidget">
+       <layout class="QVBoxLayout" name="menu_layout"/>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label_status">
+      <property name="text">
+       <string>Готово</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignCenter</set>
+      </property>
+      <property name="styleSheet">
+       <string>color: gray; padding: 5px;</string>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+</ui>

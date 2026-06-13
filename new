@@ -1,0 +1,6 @@
+Clear-History
+
+Remove-Item (Get-PSReadLineOption).HistorySavePath
+
+pyuic6 ui/auth.ui -o ui/auth_ui.py
+pyuic6 ui/menu.ui -o ui/menu_ui.py
