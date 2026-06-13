@@ -1,0 +1,1454 @@
+-- Создание базы данных
+DROP DATABASE IF EXISTS pizza3;
+CREATE DATABASE pizza3;
+USE pizza3;
+
+-- Таблица ролей
+CREATE TABLE roles (
+    id_role INT PRIMARY KEY AUTO_INCREMENT,
+    name_role VARCHAR(50) NOT NULL
+);
+
+-- Таблица пользователей
+CREATE TABLE users (
+    id_user INT PRIMARY KEY AUTO_INCREMENT,
+    username VARCHAR(100) NOT NULL UNIQUE,
+    password VARCHAR(255) NOT NULL,
+    contact_info VARCHAR(255),
+    id_role INT NOT NULL,
+    FOREIGN KEY (id_role) REFERENCES roles(id_role)
+);
+
+-- Таблица меню
+CREATE TABLE menu (
+    id_menu INT PRIMARY KEY AUTO_INCREMENT,
+    name_item VARCHAR(100) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    category VARCHAR(50),
+    quantity INT DEFAULT 0,
+    discount INT DEFAULT 0,
+    manufacturer VARCHAR(100),
+    supplier VARCHAR(100),
+    photo VARCHAR(255) DEFAULT 'menu.png'
+);
+
+-- Таблица заказов
+CREATE TABLE orders (
+    id_order INT PRIMARY KEY AUTO_INCREMENT,
+    id_user INT NOT NULL,
+    order_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+    total_amount DECIMAL(10,2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'Ожидает приготовления',
+    address VARCHAR(255),
+    FOREIGN KEY (id_user) REFERENCES users(id_user) ON DELETE CASCADE
+);
+
+-- Таблица позиций заказа
+CREATE TABLE order_item (
+    id_order_item INT PRIMARY KEY AUTO_INCREMENT,
+    id_order INT NOT NULL,
+    id_menu INT NOT NULL,
+    quantity INT NOT NULL,
+    FOREIGN KEY (id_order) REFERENCES orders(id_order) ON DELETE CASCADE,
+    FOREIGN KEY (id_menu) REFERENCES menu(id_menu) ON DELETE CASCADE
+);
+
+-- Начальные данные
+INSERT INTO roles (name_role) VALUES
+('admin'), ('staff'), ('customer');
+
+INSERT INTO users (username, password, contact_info, id_role) VALUES
+('admin', '123', 'Иван Админов', 1),
+('staff', '123', 'Анна Менеджер', 2),
+('customer', '123', 'Петр Клиентов', 3);
+
+INSERT INTO menu (name_item, description, price, category, quantity, discount) VALUES
+('Маргарита', 'Томатный соус, моцарелла, базилик', 450, 'Пицца', 50, 0),
+('Пепперони', 'Пепперони, моцарелла, томатный соус', 550, 'Пицца', 30, 20),
+('4 Сыра', 'Моцарелла, пармезан, горгонзола, фета', 650, 'Пицца', 0, 0),
+('Цезарь', 'Курица, пармезан, соус цезарь', 350, 'Салаты', 20, 10),
+('Тирамису', 'Кофе, маскарпоне, какао', 250, 'Десерты', 5, 0),
+('Кока-кола', 'Газированный напиток', 100, 'Напитки', 100, 5);
+
+
+
+models/menu_item.py
+
+from dataclasses import dataclass
+from PyQt6.QtGui import QPixmap
+
+@dataclass
+class MenuItem:
+    id_menu: int
+    name_item: str
+    description: str
+    price: float
+    category: str
+    quantity: int = 0
+    discount: int = 0
+    manufacturer: str = ""
+    supplier: str = ""
+    photo_path: str = "menu.png"
+    photo: QPixmap = None
+
+    @property
+    def final_price(self) -> float:
+        return self.price * (100 - self.discount) / 100
+
+
+models/user.py
+
+from dataclasses import dataclass
+
+@dataclass
+class User:
+    id_user: int
+    username: str
+    password: str
+    contact_info: str
+    id_role: int
+    name_role: str
+
+
+services/db_service.py
+
+import pymysql
+import os
+from PyQt6.QtGui import QPixmap
+from models.user import User
+from models.menu_item import MenuItem
+
+
+class DBService:
+    def __init__(self):
+        os.makedirs("data", exist_ok=True)
+        self.conn = pymysql.connect(
+            host="localhost", user="root", password="root",
+            db="pizza3", autocommit=True, charset="utf8mb4",
+            cursorclass=pymysql.cursors.DictCursor
+        )
+
+    # ==================== АВТОРИЗАЦИЯ ====================
+    def get_user(self, login, password):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT u.id_user, u.username, u.password, u.contact_info, u.id_role, r.name_role
+                FROM users u JOIN roles r ON u.id_role = r.id_role
+                WHERE u.username=%s AND u.password=%s
+            """, (login, password))
+            row = cur.fetchone()
+            return User(**row) if row else None
+
+    def get_all_users(self):
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT id_user, username, contact_info FROM users WHERE id_role = 3")
+            return cur.fetchall()
+
+    # ==================== МЕНЮ ====================
+    def get_menu(self):
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT id_menu, name_item, description, price, category, quantity, discount, manufacturer, supplier, photo FROM menu")
+            items = []
+            for row in cur.fetchall():
+                photo_name = row.get('photo', 'menu.png')
+                photo_path = os.path.join("data", photo_name)
+                if os.path.exists(photo_path):
+                    pix = QPixmap(photo_path)
+                else:
+                    default_path = os.path.join("data", "menu.png")
+                    pix = QPixmap(default_path) if os.path.exists(default_path) else QPixmap()
+                row['photo'] = pix
+                row['photo_path'] = photo_name
+                items.append(MenuItem(**row))
+            return items
+
+    def add_item(self, name, desc, price, category, quantity, discount, photo_name="menu.png"):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO menu (name_item, description, price, category, quantity, discount, photo)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (name, desc, price, category, quantity, discount, photo_name))
+
+    def update_item(self, id_menu, name, price, desc, quantity, discount, photo_name=None):
+        with self.conn.cursor() as cur:
+            if photo_name:
+                cur.execute("""
+                    UPDATE menu
+                    SET name_item=%s, price=%s, description=%s, quantity=%s, discount=%s, photo=%s
+                    WHERE id_menu=%s
+                """, (name, price, desc, quantity, discount, photo_name, id_menu))
+            else:
+                cur.execute("""
+                    UPDATE menu
+                    SET name_item=%s, price=%s, description=%s, quantity=%s, discount=%s
+                    WHERE id_menu=%s
+                """, (name, price, desc, quantity, discount, id_menu))
+
+    def delete_item(self, id_menu):
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) as cnt FROM order_item WHERE id_menu=%s", (id_menu,))
+                if cur.fetchone()['cnt'] > 0:
+                    return False, "Нельзя удалить блюдо, которое есть в заказах!"
+                cur.execute("DELETE FROM menu WHERE id_menu=%s", (id_menu,))
+                return True, ""
+        except Exception as e:
+            return False, str(e)
+
+    def get_suppliers(self):
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT DISTINCT supplier FROM menu WHERE supplier IS NOT NULL AND supplier != ''")
+            return [row['supplier'] for row in cur.fetchall()]
+
+    # ==================== ЗАКАЗЫ ====================
+    def create_order(self, id_user, id_menu, qty, price, address):
+        total = price * qty
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO orders (id_user, total_amount, address, status)
+                VALUES (%s, %s, %s, 'Ожидает приготовления')
+            """, (id_user, total, address))
+            order_id = cur.lastrowid
+            cur.execute("""
+                INSERT INTO order_item (id_order, id_menu, quantity)
+                VALUES (%s, %s, %s)
+            """, (order_id, id_menu, qty))
+            return order_id
+
+    def get_all_orders(self, status_filter="Все"):
+        with self.conn.cursor() as cur:
+            sql = """
+                SELECT o.id_order, u.username, u.contact_info, o.order_date,
+                       o.total_amount, o.status, o.address
+                FROM orders o
+                JOIN users u ON o.id_user = u.id_user
+            """
+            params = ()
+            if status_filter != "Все":
+                sql += " WHERE o.status = %s"
+                params = (status_filter,)
+            sql += " ORDER BY o.id_order DESC"
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+    def get_order_items(self, id_order):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT oi.id_order_item, m.name_item, oi.quantity, m.price
+                FROM order_item oi
+                JOIN menu m ON oi.id_menu = m.id_menu
+                WHERE oi.id_order = %s
+            """, (id_order,))
+            return cur.fetchall()
+
+    def update_order_status(self, id_order, status):
+        with self.conn.cursor() as cur:
+            cur.execute("UPDATE orders SET status=%s WHERE id_order=%s", (status, id_order))
+
+    def update_order(self, id_order, address, status):
+        with self.conn.cursor() as cur:
+            cur.execute("UPDATE orders SET address=%s, status=%s WHERE id_order=%s", (address, status, id_order))
+
+    def delete_order(self, id_order):
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("DELETE FROM order_item WHERE id_order=%s", (id_order,))
+                cur.execute("DELETE FROM orders WHERE id_order=%s", (id_order,))
+                return True, "Заказ удалён"
+        except Exception as e:
+            return False, str(e)
+
+
+ui/auth.ui
+
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>AuthWindow</class>
+ <widget class="QWidget" name="AuthWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>400</width>
+    <height>350</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Аквилон - Авторизация</string>
+  </property>
+  <layout class="QVBoxLayout" name="verticalLayout">
+   <item>
+    <widget class="QLabel" name="label_title">
+     <property name="text">
+      <string>Аквилон</string>
+     </property>
+     <property name="alignment">
+      <set>Qt::AlignCenter</set>
+     </property>
+     <property name="styleSheet">
+      <string>font-size: 28px; font-weight: bold; color: #d35400;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>20</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <widget class="QLineEdit" name="line_login">
+     <property name="placeholderText">
+      <string>Логин</string>
+     </property>
+     <property name="styleSheet">
+      <string>padding: 10px; font-size: 14px;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLineEdit" name="line_password">
+     <property name="placeholderText">
+      <string>Пароль</string>
+     </property>
+     <property name="echoMode">
+      <enum>QLineEdit::Password</enum>
+     </property>
+     <property name="styleSheet">
+      <string>padding: 10px; font-size: 14px;</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <spacer name="verticalSpacer_2">
+     <property name="orientation">
+      <enum>Qt::Vertical</enum>
+     </property>
+     <property name="sizeHint" stdset="0">
+      <size>
+       <width>20</width>
+       <height>20</height>
+      </size>
+     </property>
+    </spacer>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="horizontalLayout">
+     <item>
+      <widget class="QPushButton" name="button_login">
+       <property name="text">
+        <string>Войти</string>
+       </property>
+       <property name="styleSheet">
+        <string>background: #27ae60; color: white; padding: 10px; font-weight: bold; border-radius: 5px;</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="button_guest">
+       <property name="text">
+        <string>Гость</string>
+       </property>
+       <property name="styleSheet">
+        <string>background: #3498db; color: white; padding: 10px; border-radius: 5px;</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+</ui>
+
+
+ui/menu.ui
+
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MenuWindow</class>
+ <widget class="QMainWindow" name="MenuWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1000</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Аквилон</string>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>800</width>
+    <height>600</height>
+   </size>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="main_layout">
+    <item>
+     <layout class="QHBoxLayout" name="top_layout">
+      <item>
+       <widget class="QLabel" name="label_logo">
+        <property name="text">
+         <string>Аквилон</string>
+        </property>
+        <property name="styleSheet">
+         <string>font-size: 20px; font-weight: bold; color: #d35400;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLineEdit" name="line_search">
+        <property name="placeholderText">
+         <string>Поиск...</string>
+        </property>
+        <property name="styleSheet">
+         <string>padding: 8px;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="combo_category">
+        <property name="minimumWidth">
+         <number>120</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="combo_supplier">
+        <property name="minimumWidth">
+         <number>150</number>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_sort">
+        <property name="text">
+         <string>Сортировка ↑</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_orders">
+        <property name="text">
+         <string>Заказы</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_add">
+        <property name="text">
+         <string>Добавить</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="label_user">
+        <property name="text">
+         <string>Гость</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignRight</set>
+        </property>
+        <property name="styleSheet">
+         <string>font-size: 14px; font-weight: bold;</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="button_exit">
+        <property name="text">
+         <string>Выход</string>
+        </property>
+        <property name="styleSheet">
+         <string>background: #e74c3c; color: white;</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </item>
+    <item>
+     <widget class="QScrollArea" name="scrollArea">
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="scrollWidget">
+       <layout class="QVBoxLayout" name="menu_layout"/>
+      </widget>
+     </widget>
+    </item>
+    <item>
+     <widget class="QLabel" name="label_status">
+      <property name="text">
+       <string>Готово</string>
+      </property>
+      <property name="alignment">
+       <set>Qt::AlignCenter</set>
+      </property>
+      <property name="styleSheet">
+       <string>color: gray; padding: 5px;</string>
+      </property>
+     </widget>
+    </item>
+   </layout>
+  </widget>
+ </widget>
+</ui>
+
+
+ui/auth_ui.py
+
+# Form implementation generated from reading ui file 'ui/auth.ui'
+#
+# Created by: PyQt6 UI code generator 6.11.0
+#
+# WARNING: Any manual changes made to this file will be lost when pyuic6 is
+# run again.  Do not edit this file unless you know what you are doing.
+
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+class Ui_AuthWindow(object):
+    def setupUi(self, AuthWindow):
+        AuthWindow.setObjectName("AuthWindow")
+        AuthWindow.resize(400, 350)
+        self.verticalLayout = QtWidgets.QVBoxLayout(AuthWindow)
+        self.verticalLayout.setObjectName("verticalLayout")
+        self.label_title = QtWidgets.QLabel(parent=AuthWindow)
+        self.label_title.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.label_title.setObjectName("label_title")
+        self.verticalLayout.addWidget(self.label_title)
+        spacerItem = QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding)
+        self.verticalLayout.addItem(spacerItem)
+        self.line_login = QtWidgets.QLineEdit(parent=AuthWindow)
+        self.line_login.setObjectName("line_login")
+        self.verticalLayout.addWidget(self.line_login)
+        self.line_password = QtWidgets.QLineEdit(parent=AuthWindow)
+        self.line_password.setEchoMode(QtWidgets.QLineEdit.EchoMode.Password)
+        self.line_password.setObjectName("line_password")
+        self.verticalLayout.addWidget(self.line_password)
+        spacerItem1 = QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Policy.Minimum, QtWidgets.QSizePolicy.Policy.Expanding)
+        self.verticalLayout.addItem(spacerItem1)
+        self.horizontalLayout = QtWidgets.QHBoxLayout()
+        self.horizontalLayout.setObjectName("horizontalLayout")
+        self.button_login = QtWidgets.QPushButton(parent=AuthWindow)
+        self.button_login.setObjectName("button_login")
+        self.horizontalLayout.addWidget(self.button_login)
+        self.button_guest = QtWidgets.QPushButton(parent=AuthWindow)
+        self.button_guest.setObjectName("button_guest")
+        self.horizontalLayout.addWidget(self.button_guest)
+        self.verticalLayout.addLayout(self.horizontalLayout)
+
+        self.retranslateUi(AuthWindow)
+
+    def retranslateUi(self, AuthWindow):
+        _translate = QtCore.QCoreApplication.translate
+        AuthWindow.setWindowTitle(_translate("AuthWindow", "Аквилон - Авторизация"))
+        self.label_title.setText(_translate("AuthWindow", "Аквилон"))
+        self.label_title.setStyleSheet(_translate("AuthWindow", "font-size: 28px; font-weight: bold; color: #d35400;"))
+        self.line_login.setPlaceholderText(_translate("AuthWindow", "Логин"))
+        self.line_login.setStyleSheet(_translate("AuthWindow", "padding: 10px; font-size: 14px;"))
+        self.line_password.setPlaceholderText(_translate("AuthWindow", "Пароль"))
+        self.line_password.setStyleSheet(_translate("AuthWindow", "padding: 10px; font-size: 14px;"))
+        self.button_login.setText(_translate("AuthWindow", "Войти"))
+        self.button_login.setStyleSheet(_translate("AuthWindow", "background: #27ae60; color: white; padding: 10px; font-weight: bold; border-radius: 5px;"))
+        self.button_guest.setText(_translate("AuthWindow", "Гость"))
+        self.button_guest.setStyleSheet(_translate("AuthWindow", "background: #3498db; color: white; padding: 10px; border-radius: 5px;"))
+
+
+ui/menu_ui.py
+
+# Form implementation generated from reading ui file 'ui/menu.ui'
+#
+# Created by: PyQt6 UI code generator 6.11.0
+#
+# WARNING: Any manual changes made to this file will be lost when pyuic6 is
+# run again.  Do not edit this file unless you know what you are doing.
+
+
+from PyQt6 import QtCore, QtGui, QtWidgets
+
+
+class Ui_MenuWindow(object):
+    def setupUi(self, MenuWindow):
+        MenuWindow.setObjectName("MenuWindow")
+        MenuWindow.resize(1000, 700)
+        MenuWindow.setMinimumSize(QtCore.QSize(800, 600))
+        self.centralwidget = QtWidgets.QWidget(parent=MenuWindow)
+        self.centralwidget.setObjectName("centralwidget")
+        self.main_layout = QtWidgets.QVBoxLayout(self.centralwidget)
+        self.main_layout.setObjectName("main_layout")
+        self.top_layout = QtWidgets.QHBoxLayout()
+        self.top_layout.setObjectName("top_layout")
+        self.label_logo = QtWidgets.QLabel(parent=self.centralwidget)
+        self.label_logo.setObjectName("label_logo")
+        self.top_layout.addWidget(self.label_logo)
+        self.line_search = QtWidgets.QLineEdit(parent=self.centralwidget)
+        self.line_search.setObjectName("line_search")
+        self.top_layout.addWidget(self.line_search)
+        self.combo_category = QtWidgets.QComboBox(parent=self.centralwidget)
+        self.combo_category.setMinimumWidth(120)
+        self.combo_category.setObjectName("combo_category")
+        self.top_layout.addWidget(self.combo_category)
+        self.combo_supplier = QtWidgets.QComboBox(parent=self.centralwidget)
+        self.combo_supplier.setMinimumWidth(150)
+        self.combo_supplier.setObjectName("combo_supplier")
+        self.top_layout.addWidget(self.combo_supplier)
+        self.button_sort = QtWidgets.QPushButton(parent=self.centralwidget)
+        self.button_sort.setObjectName("button_sort")
+        self.top_layout.addWidget(self.button_sort)
+        self.button_orders = QtWidgets.QPushButton(parent=self.centralwidget)
+        self.button_orders.setObjectName("button_orders")
+        self.top_layout.addWidget(self.button_orders)
+        self.button_add = QtWidgets.QPushButton(parent=self.centralwidget)
+        self.button_add.setObjectName("button_add")
+        self.top_layout.addWidget(self.button_add)
+        self.label_user = QtWidgets.QLabel(parent=self.centralwidget)
+        self.label_user.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        self.label_user.setObjectName("label_user")
+        self.top_layout.addWidget(self.label_user)
+        self.button_exit = QtWidgets.QPushButton(parent=self.centralwidget)
+        self.button_exit.setObjectName("button_exit")
+        self.top_layout.addWidget(self.button_exit)
+        self.main_layout.addLayout(self.top_layout)
+        self.scrollArea = QtWidgets.QScrollArea(parent=self.centralwidget)
+        self.scrollArea.setWidgetResizable(True)
+        self.scrollArea.setObjectName("scrollArea")
+        self.scrollWidget = QtWidgets.QWidget()
+        self.scrollWidget.setObjectName("scrollWidget")
+        self.menu_layout = QtWidgets.QVBoxLayout(self.scrollWidget)
+        self.menu_layout.setObjectName("menu_layout")
+        self.scrollArea.setWidget(self.scrollWidget)
+        self.main_layout.addWidget(self.scrollArea)
+        self.label_status = QtWidgets.QLabel(parent=self.centralwidget)
+        self.label_status.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self.label_status.setObjectName("label_status")
+        self.main_layout.addWidget(self.label_status)
+        MenuWindow.setCentralWidget(self.centralwidget)
+
+        self.retranslateUi(MenuWindow)
+
+    def retranslateUi(self, MenuWindow):
+        _translate = QtCore.QCoreApplication.translate
+        MenuWindow.setWindowTitle(_translate("MenuWindow", "Аквилон"))
+        self.label_logo.setText(_translate("MenuWindow", "Аквилон"))
+        self.label_logo.setStyleSheet(_translate("MenuWindow", "font-size: 20px; font-weight: bold; color: #d35400;"))
+        self.line_search.setPlaceholderText(_translate("MenuWindow", "Поиск..."))
+        self.line_search.setStyleSheet(_translate("MenuWindow", "padding: 8px;"))
+        self.button_sort.setText(_translate("MenuWindow", "Сортировка ↑"))
+        self.button_orders.setText(_translate("MenuWindow", "Заказы"))
+        self.button_add.setText(_translate("MenuWindow", "Добавить"))
+        self.label_user.setText(_translate("MenuWindow", "Гость"))
+        self.label_user.setStyleSheet(_translate("MenuWindow", "font-size: 14px; font-weight: bold;"))
+        self.button_exit.setText(_translate("MenuWindow", "Выход"))
+        self.button_exit.setStyleSheet(_translate("MenuWindow", "background: #e74c3c; color: white;"))
+        self.label_status.setStyleSheet(_translate("MenuWindow", "color: gray; padding: 5px;"))
+
+
+windows/admin_window.py
+
+import os
+import shutil
+import time
+from PyQt6.QtWidgets import (
+    QPushButton, QInputDialog, QMessageBox, QFileDialog, QDialog,
+    QTableWidgetItem, QVBoxLayout, QHBoxLayout, QComboBox, QLabel,
+    QTableWidget, QFormLayout, QLineEdit, QSpinBox
+)
+from PyQt6.QtCore import Qt
+from windows.base_window import BaseWindow
+
+
+class AdminWindow(BaseWindow):
+    def __init__(self, user=None):
+        super().__init__(user)
+        self.setWindowTitle("Аквилон - Администратор")
+        self.sort_desc = False
+
+        self.button_add.show()
+        self.button_orders.show()
+        self.button_orders.setText("Управление заказами")
+        self.line_search.show()
+        self.combo_category.show()
+        self.combo_supplier.show()
+        self.button_sort.show()
+
+        self.load_suppliers()
+
+        self.button_add.clicked.connect(self.add_item)
+        self.button_orders.clicked.connect(self.manage_orders)
+        self.line_search.textChanged.connect(self.filter_menu)
+        self.combo_category.currentTextChanged.connect(self.filter_menu)
+        self.combo_supplier.currentTextChanged.connect(self.filter_menu)
+        self.button_sort.clicked.connect(self.toggle_sort)
+
+    def load_suppliers(self):
+        suppliers = self.db.get_suppliers()
+        self.combo_supplier.addItem("Все поставщики")
+        for s in suppliers:
+            self.combo_supplier.addItem(s)
+
+    def add_card_buttons(self, layout, item):
+        btn_edit = QPushButton("Изменить")
+        btn_edit.clicked.connect(lambda _, it=item: self.edit_item(it))
+        btn_del = QPushButton("Удалить")
+        btn_del.clicked.connect(lambda _, id_=item.id_menu: self.delete_item(id_))
+        layout.addWidget(btn_edit)
+        layout.addWidget(btn_del)
+
+    def filter_menu(self):
+        search = self.line_search.text().lower()
+        category = self.combo_category.currentText()
+        supplier = self.combo_supplier.currentText()
+
+        filtered = []
+        for item in self.all_items:
+            if category != "Все" and item.category != category:
+                continue
+            if supplier != "Все поставщики" and item.supplier != supplier:
+                continue
+            if search and search not in f"{item.name_item} {item.description}".lower():
+                continue
+            filtered.append(item)
+
+        if self.sort_desc:
+            filtered.sort(key=lambda x: x.price, reverse=True)
+
+        self.display_items(filtered)
+        self.label_status.setText(f"Найдено: {len(filtered)}")
+
+    def toggle_sort(self):
+        self.sort_desc = not self.sort_desc
+        self.button_sort.setText(f"Сортировка {'↓' if self.sort_desc else '↑'}")
+        self.filter_menu()
+
+    def add_item(self):
+        name, ok = QInputDialog.getText(self, "Новое блюдо", "Название:")
+        if not ok or not name.strip():
+            return
+
+        price, ok = QInputDialog.getInt(self, "Новое блюдо", "Цена (₽):", 500, 10, 10000)
+        if not ok:
+            return
+
+        cats = ["Пицца", "Салаты", "Десерты", "Напитки"]
+        category, ok = QInputDialog.getItem(self, "Новое блюдо", "Категория:", cats, 0, False)
+        if not ok:
+            return
+
+        quantity, ok = QInputDialog.getInt(self, "Новое блюдо", "Количество на складе:", 10, 0, 1000)
+        if not ok:
+            quantity = 10
+
+        discount, ok = QInputDialog.getInt(self, "Новое блюдо", "Скидка (%):", 0, 0, 100)
+        if not ok:
+            discount = 0
+
+        desc, ok = QInputDialog.getText(self, "Новое блюдо", "Описание:")
+        if not ok:
+            desc = f"Вкусное {name}"
+
+        photo_name = "menu.png"
+        reply = QMessageBox.question(self, "Фото", "Добавить фото?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            file_path, _ = QFileDialog.getOpenFileName(self, "Выберите фото", "data/", "Images (*.png *.jpg *.jpeg)")
+            if file_path and os.path.exists(file_path):
+                os.makedirs("data", exist_ok=True)
+                photo_name = os.path.basename(file_path)
+                dest_path = os.path.join("data", photo_name)
+                try:
+                    shutil.copy2(file_path, dest_path)
+                except Exception as e:
+                    QMessageBox.warning(self, "Ошибка", f"Не удалось скопировать фото:\n{e}")
+
+        try:
+            self.db.add_item(name, desc, price, category, quantity, discount, photo_name)
+            self.load_menu()
+            QMessageBox.information(self, "Успех", f"Блюдо '{name}' добавлено!")
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось добавить блюдо:\n{e}")
+
+    def edit_item(self, item):
+        try:
+            name, ok = QInputDialog.getText(self, "Изменить", "Название:", text=item.name_item)
+            if not ok:
+                return
+
+            price, ok = QInputDialog.getInt(self, "Изменить", "Цена:", value=int(item.price), min=10, max=10000)
+            if not ok:
+                return
+
+            quantity, ok = QInputDialog.getInt(self, "Изменить", "Количество:", value=item.quantity, min=0, max=1000)
+            if not ok:
+                quantity = item.quantity
+
+            discount, ok = QInputDialog.getInt(self, "Изменить", "Скидка (%):", value=item.discount, min=0, max=100)
+            if not ok:
+                discount = item.discount
+
+            desc, ok = QInputDialog.getText(self, "Изменить", "Описание:", text=item.description)
+            if not ok:
+                desc = item.description
+
+            photo_name = item.photo_path
+            reply = QMessageBox.question(self, "Фото", "Изменить фото?",
+                                         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+            if reply == QMessageBox.StandardButton.Yes:
+                file_path, _ = QFileDialog.getOpenFileName(self, "Выберите фото", "data/",
+                                                           "Images (*.png *.jpg *.jpeg)")
+                if file_path and os.path.exists(file_path):
+                    os.makedirs("data", exist_ok=True)
+                    new_photo_name = os.path.basename(file_path)
+                    dest_path = os.path.join("data", new_photo_name)
+                    try:
+                        if os.path.exists(dest_path):
+                            os.remove(dest_path)
+                            time.sleep(0.1)
+                        shutil.copy2(file_path, dest_path)
+                        photo_name = new_photo_name
+                    except Exception as e:
+                        QMessageBox.warning(self, "Ошибка", f"Не удалось скопировать фото:\n{e}")
+
+            self.db.update_item(item.id_menu, name, price, desc, quantity, discount, photo_name)
+            self.load_menu()
+            QMessageBox.information(self, "Успех", "Блюдо обновлено!")
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, "Ошибка", f"Не удалось обновить блюдо:\n{e}")
+
+    def delete_item(self, id_menu):
+        reply = QMessageBox.question(self, "Удалить", "Удалить блюдо?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            ok, msg = self.db.delete_item(id_menu)
+            if ok:
+                self.load_menu()
+                QMessageBox.information(self, "Успех", "Блюдо удалено!")
+            else:
+                QMessageBox.warning(self, "Ошибка", msg)
+
+    # ==================== УПРАВЛЕНИЕ ЗАКАЗАМИ ====================
+    def manage_orders(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Управление заказами")
+        dialog.resize(1000, 600)
+        layout = QVBoxLayout(dialog)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Статус:"))
+        self.status_combo = QComboBox()
+        self.status_combo.addItems(["Все", "Ожидает приготовления", "Готово", "Доставляется", "Выполнен"])
+        top.addWidget(self.status_combo)
+
+        btn_refresh = QPushButton("Обновить")
+        top.addWidget(btn_refresh)
+        top.addStretch()
+
+        btn_create = QPushButton("Создать заказ")
+        top.addWidget(btn_create)
+
+        layout.addLayout(top)
+
+        self.orders_table = QTableWidget()
+        self.orders_table.setColumnCount(7)
+        self.orders_table.setHorizontalHeaderLabels(["ID", "Клиент", "Телефон", "Дата", "Сумма", "Статус", "Адрес"])
+        self.orders_table.setAlternatingRowColors(True)
+        self.orders_table.horizontalHeader().setStretchLastSection(True)
+        self.orders_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        layout.addWidget(self.orders_table)
+
+        btn_layout = QHBoxLayout()
+
+        btn_edit = QPushButton("Редактировать")
+        btn_delete = QPushButton("Удалить")
+        btn_view = QPushButton("Состав заказа")
+
+        btn_layout.addWidget(btn_edit)
+        btn_layout.addWidget(btn_delete)
+        btn_layout.addWidget(btn_view)
+        btn_layout.addStretch()
+        layout.addLayout(btn_layout)
+
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("Изменить статус:"))
+
+        btn_ready = QPushButton("Готово")
+        btn_delivery = QPushButton("Доставляется")
+        btn_done = QPushButton("Выполнен")
+
+        status_layout.addWidget(btn_ready)
+        status_layout.addWidget(btn_delivery)
+        status_layout.addWidget(btn_done)
+        status_layout.addStretch()
+        layout.addLayout(status_layout)
+
+        self.status_combo.currentTextChanged.connect(self.refresh_orders_table)
+        btn_refresh.clicked.connect(self.refresh_orders_table)
+        btn_create.clicked.connect(lambda: self.create_order_dialog(dialog))
+        btn_edit.clicked.connect(lambda: self.edit_order_dialog(dialog))
+        btn_delete.clicked.connect(lambda: self.delete_order_dialog(dialog))
+        btn_view.clicked.connect(self.view_order_items)
+        btn_ready.clicked.connect(lambda: self.change_order_status("Готово"))
+        btn_delivery.clicked.connect(lambda: self.change_order_status("Доставляется"))
+        btn_done.clicked.connect(lambda: self.change_order_status("Выполнен"))
+
+        self.refresh_orders_table()
+        dialog.exec()
+
+    def refresh_orders_table(self):
+        data = self.db.get_all_orders(self.status_combo.currentText())
+        self.orders_table.setRowCount(len(data))
+        for i, row in enumerate(data):
+            self.orders_table.setItem(i, 0, QTableWidgetItem(str(row['id_order'])))
+            self.orders_table.setItem(i, 1, QTableWidgetItem(row['username']))
+            self.orders_table.setItem(i, 2, QTableWidgetItem(row.get('contact_info', '-')))
+            self.orders_table.setItem(i, 3, QTableWidgetItem(str(row['order_date'])[:19]))
+            self.orders_table.setItem(i, 4, QTableWidgetItem(f"{row['total_amount']:.0f} ₽"))
+
+            status_item = QTableWidgetItem(row['status'])
+            if row['status'] == 'Выполнен':
+                status_item.setForeground(Qt.GlobalColor.darkGreen)
+            elif row['status'] == 'Ожидает приготовления':
+                status_item.setForeground(Qt.GlobalColor.darkYellow)
+            elif row['status'] == 'Готово':
+                status_item.setForeground(Qt.GlobalColor.darkBlue)
+            self.orders_table.setItem(i, 5, status_item)
+
+            self.orders_table.setItem(i, 6, QTableWidgetItem(row['address'] or '-'))
+
+    def get_selected_order_id(self):
+        row = self.orders_table.currentRow()
+        if row < 0:
+            QMessageBox.warning(self, "Ошибка", "Выберите заказ")
+            return None
+        return int(self.orders_table.item(row, 0).text())
+
+    def change_order_status(self, new_status):
+        order_id = self.get_selected_order_id()
+        if order_id:
+            self.db.update_order_status(order_id, new_status)
+            self.refresh_orders_table()
+            QMessageBox.information(self, "Успех", f"Заказ #{order_id} → {new_status}")
+
+    def create_order_dialog(self, parent_dialog):
+        dialog = QDialog(parent_dialog)
+        dialog.setWindowTitle("Создание заказа")
+        dialog.resize(400, 350)
+        layout = QVBoxLayout(dialog)
+
+        form = QFormLayout()
+
+        self.user_combo = QComboBox()
+        users = self.db.get_all_users()
+        for u in users:
+            self.user_combo.addItem(f"{u['username']} ({u['contact_info']})", u['id_user'])
+        form.addRow("Клиент:", self.user_combo)
+
+        self.item_combo = QComboBox()
+        self.load_menu_items()
+        form.addRow("Блюдо:", self.item_combo)
+
+        self.qty_spin = QSpinBox()
+        self.qty_spin.setMinimum(1)
+        self.qty_spin.setMaximum(99)
+        self.qty_spin.valueChanged.connect(self.update_price)
+        form.addRow("Количество:", self.qty_spin)
+
+        self.address_edit = QLineEdit()
+        self.address_edit.setPlaceholderText("Адрес доставки")
+        form.addRow("Адрес:", self.address_edit)
+
+        self.price_label = QLabel()
+        form.addRow("Цена за шт:", self.price_label)
+
+        self.total_label = QLabel()
+        form.addRow("Итого:", self.total_label)
+
+        layout.addLayout(form)
+
+        btn_create = QPushButton("Оформить заказ")
+        btn_create.clicked.connect(lambda: self.save_new_order(dialog))
+        layout.addWidget(btn_create)
+
+        self.update_price()
+        dialog.exec()
+
+    def load_menu_items(self):
+        self.item_combo.clear()
+        items = self.db.get_menu()
+        for item in items:
+            if item.quantity > 0:
+                self.item_combo.addItem(f"{item.name_item} - {item.final_price:.0f} ₽", item.id_menu)
+
+    def update_price(self):
+        idx = self.item_combo.currentIndex()
+        if idx >= 0:
+            item_id = self.item_combo.itemData(idx)
+            items = self.db.get_menu()
+            for item in items:
+                if item.id_menu == item_id:
+                    self.price_label.setText(f"{item.final_price:.0f} ₽")
+                    total = item.final_price * self.qty_spin.value()
+                    self.total_label.setText(f"{total:.0f} ₽")
+                    break
+
+    def save_new_order(self, dialog):
+        user_idx = self.user_combo.currentIndex()
+        if user_idx < 0:
+            QMessageBox.warning(dialog, "Ошибка", "Выберите клиента")
+            return
+
+        item_idx = self.item_combo.currentIndex()
+        if item_idx < 0:
+            QMessageBox.warning(dialog, "Ошибка", "Выберите блюдо")
+            return
+
+        user_id = self.user_combo.itemData(user_idx)
+        item_id = self.item_combo.itemData(item_idx)
+        qty = self.qty_spin.value()
+        address = self.address_edit.text().strip()
+
+        items = self.db.get_menu()
+        price = 0
+        for item in items:
+            if item.id_menu == item_id:
+                price = item.final_price
+                break
+
+        try:
+            order_id = self.db.create_order(user_id, item_id, qty, price, address)
+            QMessageBox.information(dialog, "Успех", f"Заказ #{order_id} создан!")
+            self.refresh_orders_table()
+            dialog.accept()
+        except Exception as e:
+            QMessageBox.critical(dialog, "Ошибка", f"Не удалось создать заказ:\n{e}")
+
+    def edit_order_dialog(self, parent_dialog):
+        order_id = self.get_selected_order_id()
+        if not order_id:
+            return
+
+        orders = self.db.get_all_orders()
+        order_data = None
+        for o in orders:
+            if o['id_order'] == order_id:
+                order_data = o
+                break
+
+        if not order_data:
+            QMessageBox.warning(self, "Ошибка", "Заказ не найден")
+            return
+
+        dialog = QDialog(parent_dialog)
+        dialog.setWindowTitle(f"Редактирование заказа #{order_id}")
+        dialog.resize(400, 250)
+        layout = QVBoxLayout(dialog)
+
+        form = QFormLayout()
+
+        address_edit = QLineEdit(order_data['address'] or '')
+        status_combo = QComboBox()
+        status_combo.addItems(["Ожидает приготовления", "Готово", "Доставляется", "Выполнен"])
+        status_combo.setCurrentText(order_data['status'])
+
+        form.addRow("Адрес:", address_edit)
+        form.addRow("Статус:", status_combo)
+        layout.addLayout(form)
+
+        btn_save = QPushButton("Сохранить")
+        btn_save.clicked.connect(
+            lambda: self.save_order_changes(order_id, address_edit.text(), status_combo.currentText(), dialog))
+        layout.addWidget(btn_save)
+
+        dialog.exec()
+
+    def save_order_changes(self, order_id, address, status, dialog):
+        self.db.update_order(order_id, address, status)
+        self.refresh_orders_table()
+        QMessageBox.information(dialog, "Успех", f"Заказ #{order_id} обновлён")
+        dialog.accept()
+
+    def delete_order_dialog(self, parent_dialog):
+        order_id = self.get_selected_order_id()
+        if not order_id:
+            return
+
+        reply = QMessageBox.question(parent_dialog, "Удаление",
+                                     f"Удалить заказ #{order_id}?",
+                                     QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+
+        if reply == QMessageBox.StandardButton.Yes:
+            ok, msg = self.db.delete_order(order_id)
+            if ok:
+                self.refresh_orders_table()
+                QMessageBox.information(parent_dialog, "Успех", msg)
+            else:
+                QMessageBox.warning(parent_dialog, "Ошибка", msg)
+
+    def view_order_items(self):
+        order_id = self.get_selected_order_id()
+        if not order_id:
+            return
+
+        items = self.db.get_order_items(order_id)
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Состав заказа #{order_id}")
+        dialog.resize(500, 300)
+        layout = QVBoxLayout(dialog)
+
+        table = QTableWidget()
+        table.setRowCount(len(items))
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Блюдо", "Количество", "Цена"])
+
+        total = 0
+        for i, item in enumerate(items):
+            table.setItem(i, 0, QTableWidgetItem(item['name_item']))
+            table.setItem(i, 1, QTableWidgetItem(str(item['quantity'])))
+            table.setItem(i, 2, QTableWidgetItem(f"{item['price']:.0f} ₽"))
+            total += item['price'] * item['quantity']
+
+        layout.addWidget(table)
+        layout.addWidget(QLabel(f"Итого: {total:.0f} ₽"))
+
+        btn_close = QPushButton("Закрыть")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+
+        dialog.exec()
+
+windows/auth_window.py
+
+from PyQt6.QtWidgets import QWidget, QMessageBox
+from ui.auth_ui import Ui_AuthWindow
+from services.db_service import DBService
+
+
+class AuthWindow(QWidget, Ui_AuthWindow):
+    def __init__(self):
+        super().__init__()
+        self.setupUi(self)
+
+        self.db = DBService()
+        self.button_login.clicked.connect(self.login)
+        self.button_guest.clicked.connect(lambda: self.open_menu(None))
+
+    def login(self):
+        user = self.db.get_user(self.line_login.text().strip(), self.line_password.text().strip())
+        if user:
+            self.open_menu(user)
+        else:
+            QMessageBox.warning(self, "Ошибка", "Неверный логин или пароль")
+
+    def open_menu(self, user):
+        if not user:
+            from windows.guest_window import GuestWindow
+            self.window = GuestWindow(None)
+        else:
+            role = user.name_role.lower()
+            if role == "customer":
+                from windows.customer_window import CustomerWindow
+                self.window = CustomerWindow(user)
+            elif role == "staff":
+                from windows.manager_window import ManagerWindow
+                self.window = ManagerWindow(user)
+            elif role == "admin":
+                from windows.admin_window import AdminWindow
+                self.window = AdminWindow(user)
+            else:
+                from windows.guest_window import GuestWindow
+                self.window = GuestWindow(None)
+
+        self.window.show()
+        self.close()
+
+
+windows/base_window.py
+
+import os
+from PyQt6.QtWidgets import QMainWindow, QLabel, QFrame, QHBoxLayout, QMessageBox
+from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QPixmap
+from ui.menu_ui import Ui_MenuWindow
+from services.db_service import DBService
+from models.menu_item import MenuItem
+
+
+class BaseWindow(QMainWindow, Ui_MenuWindow):
+    COLOR_HIGH_DISCOUNT = "#2E8B57"
+    COLOR_OUT_OF_STOCK = "#ADD8E6"
+
+    def __init__(self, user=None):
+        super().__init__()
+        self.setupUi(self)
+
+        self.user = user
+        self.db = DBService()
+        self.all_items = []
+
+        # Скрываем все дополнительные элементы по умолчанию
+        self.button_add.hide()
+        self.button_orders.hide()
+        self.line_search.hide()
+        self.combo_category.hide()
+        self.combo_supplier.hide()
+        self.button_sort.hide()
+
+        if user:
+            self.label_user.setText(f"👤 {user.contact_info}")
+        else:
+            self.label_user.setText("Гость")
+
+        self.combo_category.addItems(["Все", "Пицца", "Салаты", "Десерты", "Напитки"])
+        self.button_exit.clicked.connect(self.logout)
+
+        self.load_menu()
+
+    def load_menu(self):
+        try:
+            self.all_items = self.db.get_menu()
+            self.display_items(self.all_items)
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Не удалось загрузить меню:\n{e}")
+
+    def display_items(self, items):
+        for i in reversed(range(self.menu_layout.count())):
+            widget = self.menu_layout.itemAt(i).widget()
+            if widget:
+                widget.deleteLater()
+
+        for item in items:
+            self.menu_layout.addWidget(self.create_card(item))
+        self.menu_layout.addStretch()
+
+    def create_card(self, item):
+        card = QFrame()
+        card_style = self._get_card_style(item)
+        card.setStyleSheet(card_style)
+        layout = QHBoxLayout(card)
+
+        # Фото
+        img = QLabel()
+        img.setFixedSize(80, 80)
+        img.setScaledContents(True)
+
+        if item.photo and not item.photo.isNull():
+            pix = item.photo.scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatio,
+                                    Qt.TransformationMode.SmoothTransformation)
+            img.setPixmap(pix)
+        else:
+            default_path = os.path.join("data", "menu.png")
+            if os.path.exists(default_path):
+                pix = QPixmap(default_path).scaled(80, 80, Qt.AspectRatioMode.KeepAspectRatio)
+                img.setPixmap(pix)
+            else:
+                # Текст вместо смайлика
+                img.setText("Нет фото")
+                img.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                img.setStyleSheet("background: #f0f0f0; font-size: 12px;")
+
+        layout.addWidget(img)
+
+        price_text = self._get_price_html(item)
+
+        stock_text = ""
+        if item.quantity <= 0:
+            stock_text = "<br><span style='color: #cc0000; font-weight: bold;'>Нет в наличии</span>"
+        elif item.quantity < 10:
+            stock_text = f"<br><span style='color: #e67e22;'>Осталось: {item.quantity} шт.</span>"
+
+        info = QLabel(f"<b>{item.name_item}</b><br>{item.description}<br>{price_text}{stock_text}")
+        info.setWordWrap(True)
+        layout.addWidget(info, 1)
+
+        self.add_card_buttons(layout, item)
+        return card
+
+    def _get_card_style(self, item):
+        if item.quantity <= 0:
+            return f"background-color: {self.COLOR_OUT_OF_STOCK}; border: 1px solid #87CEEB; border-radius: 8px; padding: 5px; margin: 5px;"
+        if item.discount > 15:
+            return f"background-color: {self.COLOR_HIGH_DISCOUNT}; color: white; border: 1px solid #1a6b3a; border-radius: 8px; padding: 5px; margin: 5px;"
+        return "background-color: white; border: 1px solid #ddd; border-radius: 8px; padding: 5px; margin: 5px;"
+
+    def _get_price_html(self, item):
+        if item.discount > 0:
+            return f'<span style="color: red; text-decoration: line-through;">{item.price:.0f} ₽</span> <b style="color: black;">{item.final_price:.0f} ₽</b> <span style="color: #27ae60;">(-{item.discount}%)</span>'
+        return f'<b style="color: green;">{item.price:.0f} ₽</b>'
+
+    def add_card_buttons(self, layout, item):
+        pass
+
+    def logout(self):
+        from windows.auth_window import AuthWindow
+        self.auth = AuthWindow()
+        self.auth.show()
+        self.close()
+
+
+windows/customer_window.py
+
+from windows.base_window import BaseWindow
+
+class CustomerWindow(BaseWindow):
+    def __init__(self, user=None):
+        super().__init__(user)
+        self.setWindowTitle("Клиент")
+
+
+windows/guest_window.py
+
+
+from windows.base_window import BaseWindow
+
+class GuestWindow(BaseWindow):
+    def __init__(self, user=None):
+        super().__init__(user)
+        self.setWindowTitle("Гость")
+
+
+windows/manager_window.py
+
+
+from PyQt6.QtWidgets import QPushButton, QDialog, QTableWidgetItem, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, \
+    QTableWidget
+from PyQt6.QtCore import Qt
+from windows.base_window import BaseWindow
+
+
+class ManagerWindow(BaseWindow):
+    def __init__(self, user=None):
+        super().__init__(user)
+        self.setWindowTitle("Аквилон - Менеджер")
+        self.sort_desc = False
+
+        self.button_orders.show()
+        self.button_orders.setText("Просмотр заказов")
+        self.line_search.show()
+        self.combo_category.show()
+        self.combo_supplier.show()
+        self.button_sort.show()
+
+        self.load_suppliers()
+
+        self.button_orders.clicked.connect(self.view_orders)
+        self.line_search.textChanged.connect(self.filter_menu)
+        self.combo_category.currentTextChanged.connect(self.filter_menu)
+        self.combo_supplier.currentTextChanged.connect(self.filter_menu)
+        self.button_sort.clicked.connect(self.toggle_sort)
+
+    def load_suppliers(self):
+        suppliers = self.db.get_suppliers()
+        self.combo_supplier.addItem("Все поставщики")
+        for s in suppliers:
+            self.combo_supplier.addItem(s)
+
+    def filter_menu(self):
+        search = self.line_search.text().lower()
+        category = self.combo_category.currentText()
+        supplier = self.combo_supplier.currentText()
+
+        filtered = []
+        for item in self.all_items:
+            if category != "Все" and item.category != category:
+                continue
+            if supplier != "Все поставщики" and item.supplier != supplier:
+                continue
+            if search and search not in f"{item.name_item} {item.description}".lower():
+                continue
+            filtered.append(item)
+
+        if self.sort_desc:
+            filtered.sort(key=lambda x: x.price, reverse=True)
+
+        self.display_items(filtered)
+        self.label_status.setText(f"Найдено: {len(filtered)}")
+
+    def toggle_sort(self):
+        self.sort_desc = not self.sort_desc
+        self.button_sort.setText(f"Сортировка {'↓' if self.sort_desc else '↑'}")
+        self.filter_menu()
+
+    def view_orders(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Просмотр заказов")
+        dialog.resize(900, 500)
+        layout = QVBoxLayout(dialog)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Статус:"))
+        status_combo = QComboBox()
+        status_combo.addItems(["Все", "Ожидает приготовления", "Готово", "Доставляется", "Выполнен"])
+        top.addWidget(status_combo)
+        btn_refresh = QPushButton("Обновить")
+        top.addWidget(btn_refresh)
+        layout.addLayout(top)
+
+        table = QTableWidget()
+        table.setColumnCount(6)
+        table.setHorizontalHeaderLabels(["ID", "Клиент", "Дата", "Сумма", "Статус", "Адрес"])
+        table.setAlternatingRowColors(True)
+        table.horizontalHeader().setStretchLastSection(True)
+        layout.addWidget(table)
+
+        def refresh():
+            data = self.db.get_all_orders(status_combo.currentText())
+            table.setRowCount(len(data))
+            for i, row in enumerate(data):
+                table.setItem(i, 0, QTableWidgetItem(str(row['id_order'])))
+                table.setItem(i, 1, QTableWidgetItem(row['username']))
+                table.setItem(i, 2, QTableWidgetItem(str(row['order_date'])[:19]))
+                table.setItem(i, 3, QTableWidgetItem(str(row['total_amount'])))
+
+                status_item = QTableWidgetItem(row['status'])
+                if row['status'] == 'Выполнен':
+                    status_item.setForeground(Qt.GlobalColor.darkGreen)
+                elif row['status'] == 'Ожидает приготовления':
+                    status_item.setForeground(Qt.GlobalColor.darkYellow)
+                elif row['status'] == 'Готово':
+                    status_item.setForeground(Qt.GlobalColor.darkBlue)
+                table.setItem(i, 4, status_item)
+
+                table.setItem(i, 5, QTableWidgetItem(row['address'] or '-'))
+
+        status_combo.currentTextChanged.connect(refresh)
+        btn_refresh.clicked.connect(refresh)
+        refresh()
+
+        btn_close = QPushButton("Закрыть")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close)
+
+        dialog.exec()
+
+
+main.py
+
+import sys
+from PyQt6.QtWidgets import QApplication
+from windows.auth_window import AuthWindow
+
+def main():
+    app = QApplication(sys.argv)
+    win = AuthWindow()
+    win.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
